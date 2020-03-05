@@ -1,35 +1,85 @@
-# Copyright 2018 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# [START gae_python37_app]
-from flask import Flask
-
-
-# If `entrypoint` is not defined in app.yaml, App Engine will look for an app
-# called `app` in `main.py`.
-app = Flask(__name__)
-
-
-@app.route('/')
-def hello():
-    """Return a friendly HTTP greeting."""
-    return 'Hello World!'
-
-
+import socket
+import threading
+ 
+# 端口映射配置信息
+CFG_REMOTE_IP = '218.4.186.74'
+CFG_REMOTE_PORT = 12001
+CFG_LOCAL_IP = '0.0.0.0'
+CFG_LOCAL_PORT = 80
+ 
+# 接收数据缓存大小
+PKT_BUFF_SIZE = 2048
+ 
+# 调试日志封装
+def send_log(content):
+  print content
+  return
+ 
+# 单向流数据传递
+def tcp_mapping_worker(conn_receiver, conn_sender):
+  while True:
+    try:
+      data = conn_receiver.recv(PKT_BUFF_SIZE)
+    except Exception:
+      send_log('Event: Connection closed.')
+      break
+ 
+    if not data:
+      send_log('Info: No more data is received.')
+      break
+ 
+    try:
+      conn_sender.sendall(data)
+    except Exception:
+      send_log('Error: Failed sending data.')
+      break
+ 
+    # send_log('Info: Mapping data > %s ' % repr(data))
+    send_log('Info: Mapping > %s -> %s > %d bytes.' % (conn_receiver.getpeername(), conn_sender.getpeername(), len(data)))
+ 
+  conn_receiver.close()
+  conn_sender.close()
+ 
+  return
+ 
+# 端口映射请求处理
+def tcp_mapping_request(local_conn, remote_ip, remote_port):
+  remote_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+ 
+  try:
+    remote_conn.connect((remote_ip, remote_port))
+  except Exception:
+    local_conn.close()
+    send_log('Error: Unable to connect to the remote server.')
+    return
+ 
+  threading.Thread(target=tcp_mapping_worker, args=(local_conn, remote_conn)).start()
+  threading.Thread(target=tcp_mapping_worker, args=(remote_conn, local_conn)).start()
+ 
+  return
+ 
+# 端口映射函数
+def tcp_mapping(remote_ip, remote_port, local_ip, local_port):
+  local_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  local_server.bind((local_ip, local_port))
+  local_server.listen(5)
+ 
+  send_log('Event: Starting mapping service on ' + local_ip + ':' + str(local_port) + ' ...')
+ 
+  while True:
+    try:
+      (local_conn, local_addr) = local_server.accept()
+    except KeyboardInterrupt, Exception:
+      local_server.close()
+      send_log('Event: Stop mapping service.')
+      break
+ 
+    threading.Thread(target=tcp_mapping_request, args=(local_conn, remote_ip, remote_port)).start()
+ 
+    send_log('Event: Receive mapping request from %s:%d.' % local_addr)
+ 
+  return
+ 
+# 主函数
 if __name__ == '__main__':
-    # This is used when running locally only. When deploying to Google App
-    # Engine, a webserver process such as Gunicorn will serve the app. This
-    # can be configured by adding an `entrypoint` to app.yaml.
-    app.run(host='127.0.0.1', port=8080, debug=True)
-# [END gae_python37_app]
+  tcp_mapping(CFG_REMOTE_IP, CFG_REMOTE_PORT, CFG_LOCAL_IP, CFG_LOCAL_PORT)
